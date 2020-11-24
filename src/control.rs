@@ -1,8 +1,8 @@
 use crate::buffer::*;
 use crossbeam_utils::CachePadded;
 use derivative::Derivative;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::{ops::Deref, ptr::NonNull};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, AtomicPtr};
+use std::ops::Deref;
 
 #[cfg(feature = "futures_api")]
 use crate::waitlist::*;
@@ -36,26 +36,39 @@ impl<T> ControlBlock<T> {
     }
 }
 
-#[derive(Derivative, Eq, PartialEq)]
-#[derivative(Debug(bound = ""), Clone(bound = ""))]
-pub(super) struct ControlBlockRef<T>(NonNull<ControlBlock<T>>);
+#[derive(Debug)]
+pub(super) struct ControlBlockRef<T>(AtomicPtr<ControlBlock<T>>);
 
 impl<T> Unpin for ControlBlockRef<T> {}
 
 impl<T> ControlBlockRef<T> {
     pub(super) fn new(capacity: usize) -> Self {
-        ControlBlockRef(unsafe {
-            NonNull::new_unchecked(Box::into_raw(Box::new(ControlBlock::new(capacity))))
-        })
+        ControlBlockRef(
+            AtomicPtr::new(Box::into_raw(Box::new(ControlBlock::new(capacity))))
+        )
     }
 }
+
+impl<T> PartialEq for ControlBlockRef<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.load(Ordering::SeqCst) == other.0.load(Ordering::SeqCst)
+    }
+}
+
+impl<T> Clone for ControlBlockRef<T> {
+    fn clone(&self) -> Self {
+        Self ( AtomicPtr::new(self.0.load(Ordering::SeqCst)) )
+    }
+}
+
+impl<T> Eq for ControlBlockRef<T> {}
 
 impl<T> Deref for ControlBlockRef<T> {
     type Target = ControlBlock<T>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        unsafe { self.0.as_ref() }
+        unsafe { self.0.load(Ordering::SeqCst).as_ref().unwrap() }
     }
 }
 
